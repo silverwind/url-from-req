@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "25.5.0",
-    "@typescript/native-preview": "7.0.0-dev.20260317.1",
+    "@typescript/native-preview": "7.0.0-dev.20260318.1",
     "eslint": "9.39.4",
     "eslint-config-silverwind": "125.0.3",
     "jest-extended": "7.0.0",
@@ -27,9 +27,9 @@
     "tsdown-config-silverwind": "2.0.2",
     "typescript": "5.9.3",
     "typescript-config-silverwind": "16.0.0",
-    "updates": "17.9.1",
+    "updates": "17.10.1",
     "updates-config-silverwind": "1.0.4",
-    "versions": "14.2.1",
+    "versions": "14.2.4",
     "vitest": "4.1.0",
     "vitest-config-silverwind": "10.6.5"
   }
