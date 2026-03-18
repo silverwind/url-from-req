@@ -1,13 +1,27 @@
 import {afterAll, beforeAll, describe, expect, test} from "vitest";
-import {execSync} from "node:child_process";
-import {mkdtempSync, readFileSync, rmSync} from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import http2 from "node:http2";
 import type {AddressInfo} from "node:net";
-import {tmpdir} from "node:os";
-import {join} from "node:path";
 import urlFromReq from "./index.ts";
+
+// self-signed ECC test cert, expires 4284
+const key = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFIgASgs7VOgg1ceE
+sOcbiYq4fyOatdBFfJ6W+/Z9LxWhRANCAATI9fdsBMcpn0++uOSKGqOPo+v7VMo4
+QtC0EAfxqtCfIdqLdQmGS0Aj35YZvDLDcEJfaDlInpbf8BwKhsVMcEhx
+-----END PRIVATE KEY-----`;
+const cert = `-----BEGIN CERTIFICATE-----
+MIIBgDCCASWgAwIBAgIUePXCuz6bBbqUmoS9/TH5mb08Ho8wCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDMxODE5MTk1NVoYDzQyODQxMjI1
+MTkxOTU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO
+PQMBBwNCAATI9fdsBMcpn0++uOSKGqOPo+v7VMo4QtC0EAfxqtCfIdqLdQmGS0Aj
+35YZvDLDcEJfaDlInpbf8BwKhsVMcEhxo1MwUTAdBgNVHQ4EFgQUagh6MunOS3Sm
+b4NcJvUdA3i5MtQwHwYDVR0jBBgwFoAUagh6MunOS3Smb4NcJvUdA3i5MtQwDwYD
+VR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEAm04PiLWuwocErEtQJMN3
+ePJZRoFezP7aBPGMI/aqpRACIQC8kq8AEN7dMZdQDfM7w99I/mhHmTMznxgMpEyI
+fr/zdQ==
+-----END CERTIFICATE-----`;
 
 let httpServer: http.Server;
 let httpsServer: https.Server;
@@ -37,14 +51,6 @@ function toJSON(req: http.ClientRequest): Promise<URL> {
 }
 
 beforeAll(async () => {
-  const dir = mkdtempSync(join(tmpdir(), "url-from-req-"));
-  const keyPath = join(dir, "key.pem");
-  const certPath = join(dir, "cert.pem");
-  execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 1 -nodes -subj "/CN=localhost"`, {stdio: "ignore"});
-  const key = readFileSync(keyPath, "utf8");
-  const cert = readFileSync(certPath, "utf8");
-  rmSync(dir, {recursive: true});
-
   httpServer = http.createServer((req, res) => {
     res.writeHead(200, {"content-type": "application/json"});
     res.end(JSON.stringify(urlFromReq(req).href));
