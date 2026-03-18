@@ -18,13 +18,11 @@ import http2 from "node:http2";
 import urlFromReq from "url-from-req";
 
 http.createServer((req, res) => {
-  const url = urlFromReq(req);
-  res.end(url.href); // "http://example.com/path?q=1"
+  res.end(urlFromReq(req).href); // "http://example.com/path?q=1"
 }).listen(3000);
 
 http2.createSecureServer({key, cert}, (req, res) => {
-  const url = urlFromReq(req);
-  res.end(url.href); // "https://example.com/path?q=1"
+  res.end(urlFromReq(req).href); // "https://example.com/path?q=1"
 }).listen(3001);
 ```
 
