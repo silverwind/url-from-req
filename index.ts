@@ -30,6 +30,7 @@ function parseHostPort(hostStr: string): URL | null {
   return URL.parse(`http://${hostStr}`);
 }
 
+/** Reconstruct the original URL from a HTTP/1 or HTTP/2 request. */
 export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   const rawUrl = ("originalUrl" in req && typeof req.originalUrl === "string" ? req.originalUrl : req.url) || "";
 
