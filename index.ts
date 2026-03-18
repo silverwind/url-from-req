@@ -25,20 +25,20 @@ function parseForwarded(header: string): Record<string, string> | undefined {
   return result;
 }
 
-function parseHostPort(hostStr: string): URL | undefined {
+function parseHostPort(hostStr: string): URL | null {
   if (!hostStr.startsWith("[") && hostStr.indexOf(":") !== hostStr.lastIndexOf(":")) hostStr = `[${hostStr}]`;
-  try { return new URL(`http://${hostStr}`); } catch { return undefined; }
+  return URL.parse(`http://${hostStr}`);
 }
 
 export default function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   const rawUrl = ("originalUrl" in req && typeof req.originalUrl === "string" ? req.originalUrl : req.url) || "";
 
-  let parsedRawUrl: URL | undefined;
+  let parsedRawUrl: URL | null = null;
   let rawPath = "";
   let rawSearch = "";
 
   if (rawUrl) {
-    if (rawUrl.includes("://")) try { parsedRawUrl = new URL(rawUrl); } catch {}
+    if (rawUrl.includes("://")) parsedRawUrl = URL.parse(rawUrl);
     if (!parsedRawUrl) {
       const queryIndex = rawUrl.indexOf("?");
       rawPath = queryIndex !== -1 ? rawUrl.slice(0, queryIndex) : rawUrl;
@@ -51,7 +51,7 @@ export default function urlFromReq(req: IncomingMessage | Http2ServerRequest): U
   if (!secure && req.socket && "encrypted" in req.socket) secure = Boolean(req.socket.encrypted);
   if (!secure && "scheme" in req) secure = req.scheme === "https";
 
-  let hostUrl: URL | undefined;
+  let hostUrl: URL | null = null;
   let forwardedProto: string | undefined;
 
   if (req.headers.forwarded) {

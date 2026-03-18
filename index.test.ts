@@ -38,7 +38,7 @@ function listen(server: http.Server | https.Server | http2.Http2SecureServer): P
   });
 }
 
-function toJSON(req: http.ClientRequest): Promise<URL> {
+function fetchUrl(req: http.ClientRequest): Promise<URL> {
   return new Promise((resolve, reject) => {
     req.on("response", (res: http.IncomingMessage) => {
       let data = "";
@@ -78,11 +78,11 @@ afterAll(() => {
 });
 
 function httpGet(path: string, headers: Record<string, string> = {}) {
-  return toJSON(http.request({hostname: "127.0.0.1", port: httpPort, path, headers: {host: `127.0.0.1:${httpPort}`, ...headers}}));
+  return fetchUrl(http.request({hostname: "127.0.0.1", port: httpPort, path, headers: {host: `127.0.0.1:${httpPort}`, ...headers}}));
 }
 
 function httpsGet(path: string, headers: Record<string, string> = {}) {
-  return toJSON(https.request({hostname: "127.0.0.1", port: httpsPort, path, headers: {host: `127.0.0.1:${httpsPort}`, ...headers}, rejectUnauthorized: false}));
+  return fetchUrl(https.request({hostname: "127.0.0.1", port: httpsPort, path, headers: {host: `127.0.0.1:${httpsPort}`, ...headers}, rejectUnauthorized: false}));
 }
 
 function http2Get(path: string, headers: Record<string, string> = {}): Promise<URL> {
@@ -137,7 +137,6 @@ describe("http1", () => {
     const r = await httpGet("/", {"x-forwarded-port": "9090"});
     expect(r.port).toBe("9090");
   });
-
 
   test("forwarded host and proto", async () => {
     const r = await httpGet("/path", {forwarded: "host=public.com;proto=https"});
@@ -233,9 +232,9 @@ function mockReq(opts: {
 } = {}) {
   return {
     url: opts.url ?? "/",
-    originalUrl: opts.originalUrl,
-    secure: opts.secure,
-    scheme: opts.scheme,
+    ...(opts.originalUrl !== undefined && {originalUrl: opts.originalUrl}),
+    ...(opts.secure !== undefined && {secure: opts.secure}),
+    ...(opts.scheme !== undefined && {scheme: opts.scheme}),
     socket: {encrypted: opts.encrypted ?? false},
     headers: opts.headers ?? {},
   } as unknown as http.IncomingMessage;
