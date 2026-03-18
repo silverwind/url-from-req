@@ -15,7 +15,7 @@ Returns a [`URL`](https://developer.mozilla.org/en-US/docs/Web/API/URL) object f
 ```ts
 import http from "node:http";
 import http2 from "node:http2";
-import urlFromReq from "url-from-req";
+import {urlFromReq} from "url-from-req";
 
 http.createServer((req, res) => {
   res.end(urlFromReq(req).href); // "http://example.com/path?q=1"
