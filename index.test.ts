@@ -442,3 +442,91 @@ describe("spec compliance", () => {
     expect(r.hostname).toBe("public.com");
   });
 });
+
+describe("edge cases", () => {
+  test("x-forwarded-host comma-separated uses first", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "internal.local", "x-forwarded-host": "example.com, foobar.com"}}));
+    expect(r.hostname).toBe("example.com");
+  });
+
+  test("x-forwarded-host comma-separated with whitespace", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "internal.local", "x-forwarded-host": "example.com:8080 , foobar.com:9090"}}));
+    expect(r.hostname).toBe("example.com");
+    expect(r.port).toBe("8080");
+  });
+
+  test("x-forwarded-host as array uses first", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "internal.local", "x-forwarded-host": ["example.com", "foobar.com"]}}));
+    expect(r.hostname).toBe("example.com");
+  });
+
+  test("x-forwarded-port as array uses first", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "example.com", "x-forwarded-port": ["1337", "80"]}}));
+    expect(r.port).toBe("1337");
+  });
+
+  test("forwarded header as array uses first", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {forwarded: ["host=first.com;proto=https", "host=second.com;proto=http"]}}));
+    expect(r.hostname).toBe("first.com");
+    expect(r.protocol).toBe("https:");
+  });
+
+  test("invalid host header does not throw", () => {
+    const r = urlFromReq(mockReq({url: "/path", headers: {host: "invalid host with spaces"}}));
+    expect(r.pathname).toBe("/path");
+  });
+
+  test("empty x-forwarded-proto falls back", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "example.com", "x-forwarded-proto": ""}}));
+    expect(r.protocol).toBe("http:");
+  });
+
+  test("host header with userinfo", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "user@example.com"}}));
+    expect(r.hostname).toBe("example.com");
+  });
+
+  test("host header with userinfo and port falls back to localhost", () => {
+    const r = urlFromReq(mockReq({url: "/path", headers: {host: "user:pass@example.com:8080"}}));
+    expect(r.hostname).toBe("localhost");
+    expect(r.pathname).toBe("/path");
+  });
+
+  test("long-form ipv6 is normalized", () => {
+    const r = urlFromReq(mockReq({url: "/", headers: {host: "[2001:cdba:0000:0000:0000:0000:3257:9652]:1337"}}));
+    expect(r.hostname).toBe("[2001:cdba::3257:9652]");
+    expect(r.port).toBe("1337");
+  });
+
+  test("plain ipv4 host without port", () => {
+    const r = urlFromReq(mockReq({url: "/path", headers: {host: "127.0.0.1"}}));
+    expect(r.hostname).toBe("127.0.0.1");
+    expect(r.port).toBe("");
+    expect(r.pathname).toBe("/path");
+  });
+
+  test("path with hash fragment", () => {
+    const r = urlFromReq(mockReq({url: "/path#fragment", headers: {host: "example.com"}}));
+    expect(r.pathname).toBe("/path");
+    expect(r.hash).toBe("#fragment");
+  });
+
+  test("path with query and hash", () => {
+    const r = urlFromReq(mockReq({url: "/path?q=1#frag", headers: {host: "example.com"}}));
+    expect(r.pathname).toBe("/path");
+    expect(r.search).toBe("?q=1");
+    expect(r.hash).toBe("#frag");
+  });
+
+  test("auth-looking url path does not throw", () => {
+    const r = urlFromReq(mockReq({url: "//todo@txt", headers: {host: "example.com"}}));
+    expect(r).toBeInstanceOf(URL);
+  });
+
+  test("host header with path is ignored for path", () => {
+    const r = urlFromReq(mockReq({url: "/actual", headers: {host: "example.com:8080/ignored"}}));
+    expect(r.hostname).toBe("example.com");
+    expect(r.port).toBe("8080");
+    expect(r.pathname).toBe("/actual");
+  });
+});
