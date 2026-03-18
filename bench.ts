@@ -1,4 +1,4 @@
-import urlFromReq from "./index.ts";
+import {urlFromReq} from "./index.ts";
 
 const iterations = 100_000;
 

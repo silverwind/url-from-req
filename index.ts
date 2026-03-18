@@ -30,7 +30,7 @@ function parseHostPort(hostStr: string): URL | null {
   return URL.parse(`http://${hostStr}`);
 }
 
-export default function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
+export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   const rawUrl = ("originalUrl" in req && typeof req.originalUrl === "string" ? req.originalUrl : req.url) || "";
 
   // absolute URL in req.url (rare: proxy requests) — return as-is

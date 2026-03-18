@@ -3,7 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import http2 from "node:http2";
 import type {AddressInfo} from "node:net";
-import urlFromReq from "./index.ts";
+import {urlFromReq} from "./index.ts";
 
 // self-signed ECC test cert, expires 4284
 const key = `-----BEGIN PRIVATE KEY-----
