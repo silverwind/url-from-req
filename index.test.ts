@@ -1,9 +1,12 @@
 import {afterAll, beforeAll, describe, expect, test} from "vitest";
 import {execSync} from "node:child_process";
+import {mkdtempSync, readFileSync, rmSync} from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import http2 from "node:http2";
 import type {AddressInfo} from "node:net";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import urlFromReq from "./index.ts";
 
 let httpServer: http.Server;
@@ -34,12 +37,13 @@ function toJSON(req: http.ClientRequest): Promise<URL> {
 }
 
 beforeAll(async () => {
-  const out = execSync(
-    "openssl req -x509 -newkey rsa:2048 -keyout /dev/stdout -out /dev/stdout -days 1 -nodes -subj '/CN=localhost' 2>/dev/null",
-    {encoding: "utf8"},
-  );
-  const key = /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/.exec(out)![0];
-  const cert = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/.exec(out)![0];
+  const dir = mkdtempSync(join(tmpdir(), "url-from-req-"));
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  execSync(`openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 1 -nodes -subj "/CN=localhost"`, {stdio: "ignore"});
+  const key = readFileSync(keyPath, "utf8");
+  const cert = readFileSync(certPath, "utf8");
+  rmSync(dir, {recursive: true});
 
   httpServer = http.createServer((req, res) => {
     res.writeHead(200, {"content-type": "application/json"});
