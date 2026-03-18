@@ -21,10 +21,19 @@ npm i url-from-req
 ## Usage
 
 ```ts
+import http from "node:http";
+import http2 from "node:http2";
 import urlFromReq from "url-from-req";
 
-const url = urlFromReq(req);
-console.log(url.href); // "https://example.com/path?q=1"
+http.createServer((req, res) => {
+  const url = urlFromReq(req);
+  res.end(url.href); // "http://example.com/path?q=1"
+}).listen(3000);
+
+http2.createSecureServer({key, cert}, (req, res) => {
+  const url = urlFromReq(req);
+  res.end(url.href); // "https://example.com/path?q=1"
+}).listen(3001);
 ```
 
 ## License
