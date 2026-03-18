@@ -33,24 +33,19 @@ function parseHostPort(hostStr: string): URL | null {
 export default function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   const rawUrl = ("originalUrl" in req && typeof req.originalUrl === "string" ? req.originalUrl : req.url) || "";
 
-  let parsedRawUrl: URL | null = null;
-  let rawPath = "";
-  let rawSearch = "";
-
-  if (rawUrl) {
-    if (rawUrl.includes("://")) parsedRawUrl = URL.parse(rawUrl);
-    if (!parsedRawUrl) {
-      const queryIndex = rawUrl.indexOf("?");
-      rawPath = queryIndex !== -1 ? rawUrl.slice(0, queryIndex) : rawUrl;
-      if (queryIndex !== -1) rawSearch = rawUrl.slice(queryIndex);
-    }
+  // absolute URL in req.url (rare: proxy requests) — return as-is
+  if (rawUrl.includes("://")) {
+    const parsed = URL.parse(rawUrl);
+    if (parsed) return parsed;
   }
 
+  // detect secure connection, req.secure can throw in Express
   let secure = false;
   if ("secure" in req) try { secure = Boolean(req.secure); } catch {}
   if (!secure && req.socket && "encrypted" in req.socket) secure = Boolean(req.socket.encrypted);
   if (!secure && "scheme" in req) secure = req.scheme === "https";
 
+  // resolve host from headers (forwarded > x-forwarded-host > host > :authority)
   let hostUrl: URL | null = null;
   let forwardedProto: string | undefined;
 
@@ -70,20 +65,17 @@ export default function urlFromReq(req: IncomingMessage | Http2ServerRequest): U
     if (typeof hostHeader === "string") hostUrl = parseHostPort(hostHeader);
   }
 
+  // protocol
   let protocol = "http:";
-  if (parsedRawUrl) protocol = parsedRawUrl.protocol;
-  else if (forwardedProto) protocol = forwardedProto;
+  if (forwardedProto) protocol = forwardedProto;
   else if (req.headers["x-forwarded-proto"]) protocol = `${firstHeaderValue(req.headers, "x-forwarded-proto")!}:`;
   else if (req.headers[":scheme"]) protocol = `${firstHeaderValue(req.headers, ":scheme")!}:`;
   else if (secure) protocol = "https:";
 
-  const hostname = parsedRawUrl?.hostname || hostUrl?.hostname || "localhost";
-  const port = parsedRawUrl?.port || (req.headers["x-forwarded-port"] ? firstHeaderValue(req.headers, "x-forwarded-port") : undefined) || hostUrl?.port;
+  // build url
+  const hostname = hostUrl?.hostname || "localhost";
+  const port = (req.headers["x-forwarded-port"] ? firstHeaderValue(req.headers, "x-forwarded-port") : undefined) || hostUrl?.port;
+  const base = `${protocol}//${hostname}${port ? `:${port}` : ""}`;
 
-  let url = `${protocol}//${hostname}`;
-  if (port) url += `:${port}`;
-  url += parsedRawUrl?.pathname || rawPath;
-  if (parsedRawUrl?.search || rawSearch) url += parsedRawUrl?.search || rawSearch;
-
-  return new URL(url);
+  return new URL(rawUrl || "/", base);
 }
