@@ -25,9 +25,29 @@ function parseForwarded(header: string): Record<string, string> | undefined {
   return result;
 }
 
-function parseHostPort(hostStr: string): URL | null {
-  if (!hostStr.startsWith("[") && hostStr.indexOf(":") !== hostStr.lastIndexOf(":")) hostStr = `[${hostStr}]`;
-  return URL.parse(`http://${hostStr}`);
+function urlParseHostPort(hostStr: string): {hostname: string; port: string} | null {
+  const url = URL.parse(`http://${hostStr}`);
+  return url ? {hostname: url.hostname, port: url.port} : null;
+}
+
+function parseHostPort(hostStr: string): {hostname: string; port: string} | null {
+  if (hostStr.charCodeAt(0) === 0x5B) {
+    const close = hostStr.indexOf("]");
+    if (close === -1) return null;
+    if (close === hostStr.length - 1) return {hostname: hostStr, port: ""};
+    if (hostStr.charCodeAt(close + 1) === 0x3A) return {hostname: hostStr.slice(0, close + 1), port: hostStr.slice(close + 2)};
+    return null;
+  }
+  const colon = hostStr.indexOf(":");
+  if (colon === -1) {
+    return !hostStr.includes(" ") ? {hostname: hostStr, port: ""} : urlParseHostPort(hostStr);
+  }
+  if (hostStr.includes(":", colon + 1)) {
+    return urlParseHostPort(`[${hostStr}]`);
+  }
+  const hostname = hostStr.slice(0, colon);
+  const port = hostStr.slice(colon + 1);
+  return !hostname.includes(" ") && !port.includes(" ") ? {hostname, port} : urlParseHostPort(hostStr);
 }
 
 /** Reconstruct the original URL from a HTTP/1 or HTTP/2 request. */
@@ -47,7 +67,7 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   if (!secure && "scheme" in req) secure = req.scheme === "https";
 
   // resolve host from headers (forwarded > x-forwarded-host > host > :authority)
-  let hostUrl: URL | null = null;
+  let hostUrl: {hostname: string; port: string} | null = null;
   let forwardedProto: string | undefined;
 
   if (req.headers.forwarded) {
