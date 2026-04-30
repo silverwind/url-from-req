@@ -1,6 +1,6 @@
 {
   "name": "url-from-req",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Reconstruct the original URL from a HTTP/1 or HTTP/2 request",
   "author": "silverwind <me@silverwind.io>",
   "repository": "silverwind/url-from-req",
