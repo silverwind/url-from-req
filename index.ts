@@ -70,13 +70,12 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
   let hostUrl: {hostname: string; port: string} | null = null;
   let forwardedProto: string | undefined;
 
-  if (req.headers.forwarded) {
-    try {
-      const forwarded = parseForwarded(firstHeaderValue(req.headers, "forwarded")!);
-      if (forwarded?.host) hostUrl = parseHostPort(forwarded.host);
-      if (forwarded?.proto) forwardedProto = `${forwarded.proto}:`;
-    } catch {}
-  } else if (req.headers["x-forwarded-host"]) {
+  const forwardedHeader = firstHeaderValue(req.headers, "forwarded");
+  if (forwardedHeader) {
+    const forwarded = parseForwarded(forwardedHeader);
+    if (forwarded?.host) hostUrl = parseHostPort(forwarded.host);
+    if (forwarded?.proto) forwardedProto = `${forwarded.proto}:`;
+  } else {
     const forwardedHost = firstHeaderValue(req.headers, "x-forwarded-host");
     if (forwardedHost) hostUrl = parseHostPort(forwardedHost);
   }
@@ -86,16 +85,14 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL {
     if (typeof hostHeader === "string") hostUrl = parseHostPort(hostHeader);
   }
 
-  // protocol
   let protocol = "http:";
   if (forwardedProto) protocol = forwardedProto;
   else if (req.headers["x-forwarded-proto"]) protocol = `${firstHeaderValue(req.headers, "x-forwarded-proto")!}:`;
   else if (req.headers[":scheme"]) protocol = `${firstHeaderValue(req.headers, ":scheme")!}:`;
   else if (secure) protocol = "https:";
 
-  // build url
   const hostname = hostUrl?.hostname || "localhost";
-  const port = (req.headers["x-forwarded-port"] ? firstHeaderValue(req.headers, "x-forwarded-port") : undefined) || hostUrl?.port;
+  const port = firstHeaderValue(req.headers, "x-forwarded-port") || hostUrl?.port;
   const base = `${protocol}//${hostname}${port ? `:${port}` : ""}`;
 
   return new URL(rawUrl || "/", base);
