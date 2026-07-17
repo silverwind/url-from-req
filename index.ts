@@ -63,7 +63,7 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL | nul
   // detect secure connection, req.secure can throw in Express
   let secure = false;
   if ("secure" in req) try { secure = Boolean(req.secure); } catch {}
-  if (!secure && req.socket && "encrypted" in req.socket) secure = Boolean(req.socket.encrypted);
+  if (!secure && req.socket && "encrypted" in req.socket) secure = req.socket.encrypted;
   if (!secure && "scheme" in req) secure = req.scheme === "https";
 
   // resolve host from headers (forwarded > x-forwarded-host > host > :authority);
