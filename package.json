@@ -3,7 +3,10 @@
   "version": "2.0.0",
   "description": "Reconstruct the original URL from a HTTP/1 or HTTP/2 request",
   "author": "silverwind <me@silverwind.io>",
-  "repository": "silverwind/url-from-req",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/silverwind/url-from-req.git"
+  },
   "license": "BSD-2-Clause",
   "type": "module",
   "sideEffects": false,
