@@ -43,7 +43,7 @@ function fetchUrl(req: http.ClientRequest): Promise<URL> {
     req.on("response", (res: http.IncomingMessage) => {
       let data = "";
       res.on("data", (chunk: string) => data += chunk);
-      res.on("end", () => resolve(new URL(JSON.parse(data))));
+      res.on("end", () => resolve(new URL(data)));
     });
     req.on("error", reject);
     req.end();
@@ -51,18 +51,9 @@ function fetchUrl(req: http.ClientRequest): Promise<URL> {
 }
 
 beforeAll(async () => {
-  httpServer = http.createServer((req, res) => {
-    res.writeHead(200, {"content-type": "application/json"});
-    res.end(JSON.stringify(urlFromReq(req)!.href));
-  });
-  httpsServer = https.createServer({key, cert}, (req, res) => {
-    res.writeHead(200, {"content-type": "application/json"});
-    res.end(JSON.stringify(urlFromReq(req)!.href));
-  });
-  http2Server = http2.createSecureServer({key, cert, allowHTTP1: true}, (req, res) => {
-    res.writeHead(200, {"content-type": "application/json"});
-    res.end(JSON.stringify(urlFromReq(req)!.href));
-  });
+  httpServer = http.createServer((req, res) => res.end(urlFromReq(req)!.href));
+  httpsServer = https.createServer({key, cert}, (req, res) => res.end(urlFromReq(req)!.href));
+  http2Server = http2.createSecureServer({key, cert, allowHTTP1: true}, (req, res) => res.end(urlFromReq(req)!.href));
 
   [httpPort, httpsPort, http2Port] = await Promise.all([
     listen(httpServer),
@@ -93,7 +84,7 @@ function http2Get(path: string, headers: Record<string, string> = {}): Promise<U
     req.on("data", (chunk: Buffer) => data += String(chunk));
     req.on("end", () => {
       client.close();
-      resolve(new URL(JSON.parse(data)));
+      resolve(new URL(data));
     });
     req.on("error", reject);
   });
@@ -265,18 +256,18 @@ describe("mock tests", () => {
   });
 
   test("req.scheme https", () => {
-    const r = reqUrl({url: "/", headers: {":authority": "example.com"}, scheme: "https"});
+    const r = reqUrl({headers: {":authority": "example.com"}, scheme: "https"});
     expect(r.protocol).toBe("https:");
   });
 
   test(":scheme header", () => {
-    const r = reqUrl({url: "/", headers: {":authority": "example.com", ":scheme": "https"}});
+    const r = reqUrl({headers: {":authority": "example.com", ":scheme": "https"}});
     expect(r.protocol).toBe("https:");
     expect(r.href).toBe("https://example.com/");
   });
 
   test("host header takes priority over :authority", () => {
-    const r = reqUrl({url: "/", headers: {host: "host.com", ":authority": "authority.com"}});
+    const r = reqUrl({headers: {host: "host.com", ":authority": "authority.com"}});
     expect(r.hostname).toBe("host.com");
   });
 
@@ -287,60 +278,60 @@ describe("mock tests", () => {
   });
 
   test("full url in req.url", () => {
-    const r = reqUrl({url: "http://example.com/path?q=1", headers: {}});
+    const r = reqUrl({url: "http://example.com/path?q=1"});
     expect(r.href).toBe("http://example.com/path?q=1");
   });
 
   test("header as array", () => {
-    const r = reqUrl({url: "/", headers: {host: "example.com", "x-forwarded-proto": ["https", "http"]}});
+    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": ["https", "http"]}});
     expect(r.protocol).toBe("https:");
   });
 
   test("multiple x-forwarded-proto values", () => {
-    const r = reqUrl({url: "/", headers: {host: "example.com", "x-forwarded-proto": "https, http"}});
+    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": "https, http"}});
     expect(r.protocol).toBe("https:");
   });
 
   test("multiple forwarded entries uses first", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: "host=first.com;proto=https, host=second.com;proto=http"}});
+    const r = reqUrl({headers: {forwarded: "host=first.com;proto=https, host=second.com;proto=http"}});
     expect(r.hostname).toBe("first.com");
     expect(r.protocol).toBe("https:");
   });
 
   test("forwarded quoted host", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: 'host="example.com:8080";proto=https'}});
+    const r = reqUrl({headers: {forwarded: 'host="example.com:8080";proto=https'}});
     expect(r.hostname).toBe("example.com");
     expect(r.port).toBe("8080");
     expect(r.protocol).toBe("https:");
   });
 
   test("forwarded ipv6 host", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: 'host="[::1]:8080";proto=http'}});
+    const r = reqUrl({headers: {forwarded: 'host="[::1]:8080";proto=http'}});
     expect(r.hostname).toBe("[::1]");
     expect(r.port).toBe("8080");
   });
 
   test("bracketed ipv6 host header", () => {
-    const r = reqUrl({url: "/", headers: {host: "[::1]:8080"}});
+    const r = reqUrl({headers: {host: "[::1]:8080"}});
     expect(r.hostname).toBe("[::1]");
     expect(r.port).toBe("8080");
     expect(r.href).toBe("http://[::1]:8080/");
   });
 
   test("bracketed ipv6 without port", () => {
-    const r = reqUrl({url: "/", headers: {host: "[::1]"}});
+    const r = reqUrl({headers: {host: "[::1]"}});
     expect(r.hostname).toBe("[::1]");
     expect(r.href).toBe("http://[::1]/");
   });
 
   test("bare ipv6 gets brackets", () => {
-    const r = reqUrl({url: "/", headers: {host: "::1"}});
+    const r = reqUrl({headers: {host: "::1"}});
     expect(r.hostname).toBe("[::1]");
     expect(r.href).toBe("http://[::1]/");
   });
 
   test("full ipv6 address with port", () => {
-    const r = reqUrl({url: "/", headers: {host: "[2001:db8::1]:443"}});
+    const r = reqUrl({headers: {host: "[2001:db8::1]:443"}});
     expect(r.hostname).toBe("[2001:db8::1]");
     expect(r.port).toBe("443");
   });
@@ -352,13 +343,11 @@ describe("mock tests", () => {
 });
 
 describe("spec compliance", () => {
-  // WHATWG URL: hostname is lowercased
   test("hostname is normalized to lowercase", () => {
     const r = reqUrl({headers: {host: "Example.COM"}});
     expect(r.hostname).toBe("example.com");
   });
 
-  // WHATWG URL: default ports are omitted
   test("default port 80 is omitted for http", () => {
     const r = reqUrl({headers: {host: "example.com:80"}});
     expect(r.port).toBe("");
@@ -371,39 +360,33 @@ describe("spec compliance", () => {
     expect(r.href).toBe("https://example.com/");
   });
 
-  // WHATWG URL: pathname is normalized
   test("pathname trailing slash is normalized", () => {
     const r = reqUrl({headers: {host: "example.com"}});
     expect(r.pathname).toBe("/");
   });
 
-  // WHATWG URL: percent-encoding is preserved
   test("percent-encoded path is preserved", () => {
     const r = reqUrl({url: "/path%20with%20spaces", headers: {host: "example.com"}});
     expect(r.pathname).toBe("/path%20with%20spaces");
   });
 
-  // RFC 7239: Forwarded header with all parameters
   test("rfc 7239 forwarded with for, by, host, proto", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: "for=192.0.2.60;proto=https;by=203.0.113.43;host=example.com"}});
+    const r = reqUrl({headers: {forwarded: "for=192.0.2.60;proto=https;by=203.0.113.43;host=example.com"}});
     expect(r.hostname).toBe("example.com");
     expect(r.protocol).toBe("https:");
   });
 
-  // RFC 7239: Forwarded with quoted IPv6 for
   test("rfc 7239 forwarded with quoted ipv6 for", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: 'for="[2001:db8:cafe::17]";host=example.com'}});
+    const r = reqUrl({headers: {forwarded: 'for="[2001:db8:cafe::17]";host=example.com'}});
     expect(r.hostname).toBe("example.com");
   });
 
-  // RFC 7239: case-insensitive parameter names
   test("rfc 7239 case-insensitive parameter names", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: "Host=example.com;Proto=https"}});
+    const r = reqUrl({headers: {forwarded: "Host=example.com;Proto=https"}});
     expect(r.hostname).toBe("example.com");
     expect(r.protocol).toBe("https:");
   });
 
-  // RFC 7230: Host header with IPv6
   test("rfc 7230 host header with ipv6 and port", () => {
     const r = reqUrl({url: "/path", headers: {host: "[2001:db8::1]:8080"}});
     expect(r.hostname).toBe("[2001:db8::1]");
@@ -411,17 +394,15 @@ describe("spec compliance", () => {
     expect(r.pathname).toBe("/path");
   });
 
-  // HTTP/2 pseudo-headers
   test("http2 :authority with port", () => {
-    const r = reqUrl({url: "/", headers: {":authority": "example.com:8443", ":scheme": "https"}});
+    const r = reqUrl({headers: {":authority": "example.com:8443", ":scheme": "https"}});
     expect(r.hostname).toBe("example.com");
     expect(r.port).toBe("8443");
     expect(r.protocol).toBe("https:");
   });
 
-  // Priority: Forwarded > X-Forwarded-Proto > :scheme > socket
   test("header priority: forwarded proto > x-forwarded-proto", () => {
-    const r = reqUrl({url: "/", headers: {
+    const r = reqUrl({headers: {
       host: "example.com",
       forwarded: "proto=https",
       "x-forwarded-proto": "http",
@@ -430,7 +411,7 @@ describe("spec compliance", () => {
   });
 
   test("header priority: x-forwarded-proto > :scheme", () => {
-    const r = reqUrl({url: "/", headers: {
+    const r = reqUrl({headers: {
       host: "example.com",
       "x-forwarded-proto": "http",
       ":scheme": "https",
@@ -439,7 +420,7 @@ describe("spec compliance", () => {
   });
 
   test("header priority: x-forwarded-host > host", () => {
-    const r = reqUrl({url: "/", headers: {
+    const r = reqUrl({headers: {
       host: "internal.local",
       "x-forwarded-host": "public.com",
     }});
@@ -449,28 +430,28 @@ describe("spec compliance", () => {
 
 describe("edge cases", () => {
   test("x-forwarded-host comma-separated uses first", () => {
-    const r = reqUrl({url: "/", headers: {host: "internal.local", "x-forwarded-host": "example.com, foobar.com"}});
+    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": "example.com, foobar.com"}});
     expect(r.hostname).toBe("example.com");
   });
 
   test("x-forwarded-host comma-separated with whitespace", () => {
-    const r = reqUrl({url: "/", headers: {host: "internal.local", "x-forwarded-host": "example.com:8080 , foobar.com:9090"}});
+    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": "example.com:8080 , foobar.com:9090"}});
     expect(r.hostname).toBe("example.com");
     expect(r.port).toBe("8080");
   });
 
   test("x-forwarded-host as array uses first", () => {
-    const r = reqUrl({url: "/", headers: {host: "internal.local", "x-forwarded-host": ["example.com", "foobar.com"]}});
+    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": ["example.com", "foobar.com"]}});
     expect(r.hostname).toBe("example.com");
   });
 
   test("x-forwarded-port as array uses first", () => {
-    const r = reqUrl({url: "/", headers: {host: "example.com", "x-forwarded-port": ["1337", "80"]}});
+    const r = reqUrl({headers: {host: "example.com", "x-forwarded-port": ["1337", "80"]}});
     expect(r.port).toBe("1337");
   });
 
   test("forwarded header as array uses first", () => {
-    const r = reqUrl({url: "/", headers: {forwarded: ["host=first.com;proto=https", "host=second.com;proto=http"]}});
+    const r = reqUrl({headers: {forwarded: ["host=first.com;proto=https", "host=second.com;proto=http"]}});
     expect(r.hostname).toBe("first.com");
     expect(r.protocol).toBe("https:");
   });
@@ -480,12 +461,12 @@ describe("edge cases", () => {
   });
 
   test("empty x-forwarded-proto falls back", () => {
-    const r = reqUrl({url: "/", headers: {host: "example.com", "x-forwarded-proto": ""}});
+    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": ""}});
     expect(r.protocol).toBe("http:");
   });
 
   test("host header with userinfo", () => {
-    const r = reqUrl({url: "/", headers: {host: "user@example.com"}});
+    const r = reqUrl({headers: {host: "user@example.com"}});
     expect(r.hostname).toBe("example.com");
   });
 
@@ -494,7 +475,7 @@ describe("edge cases", () => {
   });
 
   test("long-form ipv6 is normalized", () => {
-    const r = reqUrl({url: "/", headers: {host: "[2001:cdba:0000:0000:0000:0000:3257:9652]:1337"}});
+    const r = reqUrl({headers: {host: "[2001:cdba:0000:0000:0000:0000:3257:9652]:1337"}});
     expect(r.hostname).toBe("[2001:cdba::3257:9652]");
     expect(r.port).toBe("1337");
   });
@@ -534,26 +515,26 @@ describe("edge cases", () => {
 
 describe("invalid input returns null", () => {
   test("host header with non-numeric port", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {host: "example.com:x"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {host: "example.com:x"}}))).toBeNull();
   });
 
   test("host header with invalid characters", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {host: "%"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {host: "%"}}))).toBeNull();
   });
 
   test("invalid x-forwarded-proto", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {host: "example.com", "x-forwarded-proto": "ja va"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {host: "example.com", "x-forwarded-proto": "ja va"}}))).toBeNull();
   });
 
   test("invalid forwarded proto", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {forwarded: "host=example.com;proto=ja va"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {forwarded: "host=example.com;proto=ja va"}}))).toBeNull();
   });
 
   test("invalid x-forwarded-host with non-numeric port", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {host: "example.com", "x-forwarded-host": "public.com:x"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {host: "example.com", "x-forwarded-host": "public.com:x"}}))).toBeNull();
   });
 
   test("unparseable forwarded host is not rescued by valid host header", () => {
-    expect(urlFromReq(mockReq({url: "/", headers: {forwarded: "host=[::1;proto=https", host: "example.com"}}))).toBeNull();
+    expect(urlFromReq(mockReq({headers: {forwarded: "host=[::1;proto=https", host: "example.com"}}))).toBeNull();
   });
 });
