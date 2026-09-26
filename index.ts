@@ -101,5 +101,5 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL | nul
   const port = firstHeaderValue(req.headers, "x-forwarded-port") || hostPort?.port;
   const base = `${protocol}//${hostname}${port ? `:${port}` : ""}`;
 
-  return URL.parse(rawUrl || "/", base);
+  return URL.parse(rawUrl.startsWith("//") || rawUrl.startsWith("/\\") ? `/.${rawUrl}` : rawUrl || "/", base); // "/." keeps the path from parsing as a host
 }

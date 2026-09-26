@@ -500,9 +500,9 @@ describe("edge cases", () => {
     expect(r.hash).toBe("#frag");
   });
 
-  test("auth-looking url path does not throw", () => {
-    const r = reqUrl({url: "//todo@txt", headers: {host: "example.com"}});
-    expect(r).toBeInstanceOf(URL);
+  test("protocol-relative path does not override host", () => {
+    expect(reqUrl({url: "//todo@txt", headers: {host: "example.com"}}).href).toBe("http://example.com//todo@txt");
+    expect(reqUrl({url: "/\\evil.com/path", headers: {host: "example.com"}}).href).toBe("http://example.com//evil.com/path");
   });
 
   test("host header with path is ignored for path", () => {
