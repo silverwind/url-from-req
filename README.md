@@ -1,5 +1,4 @@
 # url-from-req
-
 [![](https://img.shields.io/npm/v/url-from-req.svg?style=flat)](https://www.npmjs.org/package/url-from-req) [![](https://img.shields.io/npm/dm/url-from-req.svg)](https://www.npmjs.org/package/url-from-req) [![](https://packagephobia.com/badge?p=url-from-req)](https://packagephobia.com/result?p=url-from-req) [![](https://depx.co/api/badge/url-from-req)](https://depx.co/pkg/url-from-req)
 
 Returns a [`URL`](https://developer.mozilla.org/en-US/docs/Web/API/URL) object from a Node.js `IncomingMessage` or `Http2ServerRequest`, accounting for proxy headers. Returns `null` when the request does not form a valid URL.
@@ -11,6 +10,10 @@ Returns a [`URL`](https://developer.mozilla.org/en-US/docs/Web/API/URL) object f
 - Zero dependencies
 
 ## Usage
+
+```sh
+pnpm add url-from-req
+```
 
 ```ts
 import http from "node:http";
@@ -26,6 +29,4 @@ http2.createSecureServer({key, cert}, (req, res) => {
 }).listen(3001);
 ```
 
-## License
-
-BSD-2-Clause
+© [silverwind](https://github.com/silverwind), distributed under BSD licence
