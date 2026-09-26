@@ -1,6 +1,8 @@
 import type {IncomingMessage, IncomingHttpHeaders} from "node:http";
 import type {Http2ServerRequest} from "node:http2";
 
+type HostPort = {hostname: string; port: string};
+
 function firstHeaderValue(headers: IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name];
   if (!value) return undefined;
@@ -9,28 +11,26 @@ function firstHeaderValue(headers: IncomingHttpHeaders, name: string): string | 
   return commaIndex !== -1 ? str.slice(0, commaIndex).trim() : str;
 }
 
-function parseForwarded(header: string): Record<string, string> | undefined {
-  let result: Record<string, string> | undefined;
+function parseForwarded(header: string): Record<string, string> {
+  const result: Record<string, string> = {};
   for (const part of header.split(";")) {
     const eqIndex = part.indexOf("=");
     if (eqIndex === -1) continue;
-    const key = part.slice(0, eqIndex).trim().toLowerCase();
     let value = part.slice(eqIndex + 1).trim();
     if (value.length >= 2 && value.charCodeAt(0) === 0x22 && value.charCodeAt(value.length - 1) === 0x22) {
       value = value.slice(1, -1).replace(/\\(.)/g, "$1");
     }
-    result ??= {};
-    result[key] = value;
+    result[part.slice(0, eqIndex).trim().toLowerCase()] = value;
   }
   return result;
 }
 
-function urlParseHostPort(hostStr: string): {hostname: string; port: string} | null {
+function urlParseHostPort(hostStr: string): HostPort | null {
   const url = URL.parse(`http://${hostStr}`);
   return url ? {hostname: url.hostname, port: url.port} : null;
 }
 
-function parseHostPort(hostStr: string): {hostname: string; port: string} | null {
+function parseHostPort(hostStr: string): HostPort | null {
   if (hostStr.charCodeAt(0) === 0x5B) {
     const close = hostStr.indexOf("]");
     if (close === -1) return null;
@@ -54,45 +54,40 @@ function parseHostPort(hostStr: string): {hostname: string; port: string} | null
 export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL | null {
   const rawUrl = ("originalUrl" in req && typeof req.originalUrl === "string" ? req.originalUrl : req.url) || "";
 
-  // absolute URL in req.url (rare: proxy requests) — return as-is
   if (rawUrl.includes("://")) {
     const parsed = URL.parse(rawUrl);
     if (parsed) return parsed;
   }
 
-  // detect secure connection, req.secure can throw in Express
   let secure = false;
-  if ("secure" in req) try { secure = Boolean(req.secure); } catch {}
+  if ("secure" in req) try { secure = Boolean(req.secure); } catch {} // req.secure can throw in Express
   if (!secure && req.socket && "encrypted" in req.socket) secure = req.socket.encrypted;
   if (!secure && "scheme" in req) secure = req.scheme === "https";
 
-  // resolve host from headers (forwarded > x-forwarded-host > host > :authority);
-  // a present but unparseable host makes the request invalid, only a fully
-  // absent host falls back to localhost
-  let hostUrl: {hostname: string; port: string} | null = null;
+  let hostPort: HostPort | null = null;
   let forwardedProto: string | undefined;
 
   const forwardedHeader = firstHeaderValue(req.headers, "forwarded");
   if (forwardedHeader) {
     const forwarded = parseForwarded(forwardedHeader);
-    if (forwarded?.host) {
-      hostUrl = parseHostPort(forwarded.host);
-      if (!hostUrl) return null;
+    if (forwarded.host) {
+      hostPort = parseHostPort(forwarded.host);
+      if (!hostPort) return null;
     }
-    if (forwarded?.proto) forwardedProto = `${forwarded.proto}:`;
+    if (forwarded.proto) forwardedProto = `${forwarded.proto}:`;
   } else {
     const forwardedHost = firstHeaderValue(req.headers, "x-forwarded-host");
     if (forwardedHost) {
-      hostUrl = parseHostPort(forwardedHost);
-      if (!hostUrl) return null;
+      hostPort = parseHostPort(forwardedHost);
+      if (!hostPort) return null;
     }
   }
 
-  if (!hostUrl) {
+  if (!hostPort) {
     const hostHeader = req.headers.host ?? req.headers[":authority"];
     if (typeof hostHeader === "string") {
-      hostUrl = parseHostPort(hostHeader);
-      if (!hostUrl) return null;
+      hostPort = parseHostPort(hostHeader);
+      if (!hostPort) return null;
     }
   }
 
@@ -102,8 +97,8 @@ export function urlFromReq(req: IncomingMessage | Http2ServerRequest): URL | nul
   else if (req.headers[":scheme"]) protocol = `${firstHeaderValue(req.headers, ":scheme")!}:`;
   else if (secure) protocol = "https:";
 
-  const hostname = hostUrl?.hostname || "localhost";
-  const port = firstHeaderValue(req.headers, "x-forwarded-port") || hostUrl?.port;
+  const hostname = hostPort?.hostname || "localhost";
+  const port = firstHeaderValue(req.headers, "x-forwarded-port") || hostPort?.port;
   const base = `${protocol}//${hostname}${port ? `:${port}` : ""}`;
 
   return URL.parse(rawUrl || "/", base);
