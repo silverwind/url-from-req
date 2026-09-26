@@ -1,11 +1,12 @@
-import {afterAll, beforeAll, describe, expect, test} from "vitest";
+import {afterAll, describe, expect, test} from "vitest";
+import {once} from "node:events";
 import http from "node:http";
 import https from "node:https";
 import http2 from "node:http2";
-import type {AddressInfo} from "node:net";
+import type {AddressInfo, Server} from "node:net";
+import {text} from "node:stream/consumers";
 import {urlFromReq} from "./index.ts";
 
-// self-signed ECC test cert, expires 4284
 const key = `-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFIgASgs7VOgg1ceE
 sOcbiYq4fyOatdBFfJ6W+/Z9LxWhRANCAATI9fdsBMcpn0++uOSKGqOPo+v7VMo4
@@ -23,518 +24,123 @@ ePJZRoFezP7aBPGMI/aqpRACIQC8kq8AEN7dMZdQDfM7w99I/mhHmTMznxgMpEyI
 fr/zdQ==
 -----END CERTIFICATE-----`;
 
-let httpServer: http.Server;
-let httpsServer: https.Server;
-let http2Server: http2.Http2SecureServer;
-let httpPort: number;
-let httpsPort: number;
-let http2Port: number;
-
-function listen(server: http.Server | https.Server | http2.Http2SecureServer): Promise<number> {
-  return new Promise(resolve => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as AddressInfo).port);
-    });
-  });
-}
-
-function fetchUrl(req: http.ClientRequest): Promise<URL> {
-  return new Promise((resolve, reject) => {
-    req.on("response", (res: http.IncomingMessage) => {
-      let data = "";
-      res.on("data", (chunk: string) => data += chunk);
-      res.on("end", () => resolve(new URL(data)));
-    });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-beforeAll(async () => {
-  httpServer = http.createServer((req, res) => res.end(urlFromReq(req)!.href));
-  httpsServer = https.createServer({key, cert}, (req, res) => res.end(urlFromReq(req)!.href));
-  http2Server = http2.createSecureServer({key, cert, allowHTTP1: true}, (req, res) => res.end(urlFromReq(req)!.href));
-
-  [httpPort, httpsPort, http2Port] = await Promise.all([
-    listen(httpServer),
-    listen(httpsServer),
-    listen(http2Server),
-  ]);
-});
-
+const servers: Server[] = [
+  http.createServer((req, res) => res.end(urlFromReq(req)!.href)),
+  https.createServer({key, cert}, (req, res) => res.end(urlFromReq(req)!.href)),
+  http2.createSecureServer({key, cert, allowHTTP1: true}, (req, res) => res.end(urlFromReq(req)!.href)),
+];
+const [httpPort, httpsPort, http2Port] = await Promise.all(servers.map(async server => {
+  await once(server.listen(0, "127.0.0.1"), "listening");
+  return (server.address() as AddressInfo).port;
+}));
+const http2Client = http2.connect(`https://127.0.0.1:${http2Port}`, {rejectUnauthorized: false});
 afterAll(() => {
-  httpServer?.close();
-  httpsServer?.close();
-  http2Server?.close();
+  http2Client.close();
+  for (const server of servers) server.close();
 });
 
-function httpGet(path: string, headers: Record<string, string> = {}) {
-  return fetchUrl(http.request({hostname: "127.0.0.1", port: httpPort, path, headers: {host: `127.0.0.1:${httpPort}`, ...headers}}));
+function request(req: http.ClientRequest): Promise<string> {
+  return new Promise((resolve, reject) => req.on("response", res => resolve(text(res))).on("error", reject).end());
 }
 
-function httpsGet(path: string, headers: Record<string, string> = {}) {
-  return fetchUrl(https.request({hostname: "127.0.0.1", port: httpsPort, path, headers: {host: `127.0.0.1:${httpsPort}`, ...headers}, rejectUnauthorized: false}));
+const httpGet = (path: string, headers?: http.OutgoingHttpHeaders) => request(http.request({host: "127.0.0.1", port: httpPort, path, headers}));
+const httpsGet = (path: string, headers?: http.OutgoingHttpHeaders) => request(https.request({host: "127.0.0.1", port: httpsPort, path, headers, rejectUnauthorized: false}));
+const http2Get = (path: string, headers?: http2.OutgoingHttpHeaders) => text(http2Client.request({":path": path, ...headers}));
+
+test.each<[string, () => Promise<string>, string]>([
+  ["http1 root path", () => httpGet("/"), `http://127.0.0.1:${httpPort}/`],
+  ["http1 path with query", () => httpGet("/path?q=1"), `http://127.0.0.1:${httpPort}/path?q=1`],
+  ["http1 x-forwarded-proto", () => httpGet("/", {"x-forwarded-proto": "https"}), `https://127.0.0.1:${httpPort}/`],
+  ["http1 x-forwarded-host", () => httpGet("/path", {"x-forwarded-host": "public.com"}), "http://public.com/path"],
+  ["http1 x-forwarded-host with port", () => httpGet("/", {"x-forwarded-host": "public.com:8080"}), "http://public.com:8080/"],
+  ["http1 x-forwarded-port", () => httpGet("/", {"x-forwarded-port": "9090"}), "http://127.0.0.1:9090/"],
+  ["http1 forwarded host and proto", () => httpGet("/path", {forwarded: "host=public.com;proto=https"}), "https://public.com/path"],
+  ["http1 forwarded host with port", () => httpGet("/", {forwarded: "host=public.com:8443;proto=https"}), "https://public.com:8443/"],
+  ["http1 forwarded proto only falls through to host header", () => httpGet("/", {forwarded: "proto=https"}), `https://127.0.0.1:${httpPort}/`],
+  ["http1 forwarded takes priority over x-forwarded-host", () => httpGet("/", {forwarded: "host=forwarded.com", "x-forwarded-host": "xforwarded.com"}), "http://forwarded.com/"],
+  ["http1 custom host header", () => httpGet("/", {host: "custom.com:3000"}), "http://custom.com:3000/"],
+  ["https detects encrypted connection", () => httpsGet("/"), `https://127.0.0.1:${httpsPort}/`],
+  ["https path with query", () => httpsGet("/secure?token=abc"), `https://127.0.0.1:${httpsPort}/secure?token=abc`],
+  ["https x-forwarded-proto overrides detected protocol", () => httpsGet("/", {"x-forwarded-proto": "http"}), `http://127.0.0.1:${httpsPort}/`],
+  ["http2 uses :authority for hostname", () => http2Get("/"), `https://127.0.0.1:${http2Port}/`],
+  ["http2 path with query", () => http2Get("/path?q=1"), `https://127.0.0.1:${http2Port}/path?q=1`],
+  ["http2 x-forwarded-host overrides :authority", () => http2Get("/", {"x-forwarded-host": "public.com"}), "https://public.com/"],
+  ["http2 forwarded header", () => http2Get("/path", {forwarded: "host=proxy.com:443;proto=https"}), "https://proxy.com/path"],
+  ["http2 x-forwarded-proto overrides :scheme", () => http2Get("/", {"x-forwarded-proto": "http"}), `http://127.0.0.1:${http2Port}/`],
+])("%s", async (_name, get, href) => expect(await get()).toBe(href));
+
+type MockReq = {url?: string; originalUrl?: string; headers?: Record<string, string | string[]>; socket?: {encrypted: boolean}; scheme?: string};
+
+function mockReq(req: MockReq) {
+  return {url: "/", headers: {}, socket: {encrypted: false}, ...req} as unknown as http.IncomingMessage;
 }
 
-function http2Get(path: string, headers: Record<string, string> = {}): Promise<URL> {
-  return new Promise((resolve, reject) => {
-    const client = http2.connect(`https://127.0.0.1:${http2Port}`, {rejectUnauthorized: false});
-    const req = client.request({":path": path, ":method": "GET", ...headers});
-    let data = "";
-    req.on("data", (chunk: Buffer) => data += String(chunk));
-    req.on("end", () => {
-      client.close();
-      resolve(new URL(data));
-    });
-    req.on("error", reject);
-  });
-}
-
-describe("http1", () => {
-  test("root path", async () => {
-    const r = await httpGet("/");
-    expect(r.protocol).toBe("http:");
-    expect(r.hostname).toBe("127.0.0.1");
-    expect(r.port).toBe(String(httpPort));
-    expect(r.pathname).toBe("/");
-    expect(r.href).toBe(`http://127.0.0.1:${httpPort}/`);
-  });
-
-  test("path with query", async () => {
-    const r = await httpGet("/path?q=1");
-    expect(r.pathname).toBe("/path");
-    expect(r.search).toBe("?q=1");
-    expect(r.href).toBe(`http://127.0.0.1:${httpPort}/path?q=1`);
-  });
-
-  test("x-forwarded-proto", async () => {
-    const r = await httpGet("/", {"x-forwarded-proto": "https"});
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("x-forwarded-host", async () => {
-    const r = await httpGet("/path", {"x-forwarded-host": "public.com"});
-    expect(r.hostname).toBe("public.com");
-    expect(r.href).toBe("http://public.com/path");
-  });
-
-  test("x-forwarded-host with port", async () => {
-    const r = await httpGet("/", {"x-forwarded-host": "public.com:8080"});
-    expect(r.hostname).toBe("public.com");
-    expect(r.port).toBe("8080");
-  });
-
-  test("x-forwarded-port", async () => {
-    const r = await httpGet("/", {"x-forwarded-port": "9090"});
-    expect(r.port).toBe("9090");
-  });
-
-  test("forwarded host and proto", async () => {
-    const r = await httpGet("/path", {forwarded: "host=public.com;proto=https"});
-    expect(r.hostname).toBe("public.com");
-    expect(r.protocol).toBe("https:");
-    expect(r.href).toBe("https://public.com/path");
-  });
-
-  test("forwarded host with port", async () => {
-    const r = await httpGet("/", {forwarded: "host=public.com:8443;proto=https"});
-    expect(r.hostname).toBe("public.com");
-    expect(r.port).toBe("8443");
-    expect(r.href).toBe("https://public.com:8443/");
-  });
-
-  test("forwarded proto only falls through to host header", async () => {
-    const r = await httpGet("/", {forwarded: "proto=https"});
-    expect(r.hostname).toBe("127.0.0.1");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("forwarded takes priority over x-forwarded-host", async () => {
-    const r = await httpGet("/", {forwarded: "host=forwarded.com", "x-forwarded-host": "xforwarded.com"});
-    expect(r.hostname).toBe("forwarded.com");
-  });
-
-  test("custom host header", async () => {
-    const r = await httpGet("/", {host: "custom.com:3000"});
-    expect(r.hostname).toBe("custom.com");
-    expect(r.port).toBe("3000");
-  });
-});
-
-describe("https", () => {
-  test("detects encrypted connection", async () => {
-    const r = await httpsGet("/");
-    expect(r.protocol).toBe("https:");
-    expect(r.href).toBe(`https://127.0.0.1:${httpsPort}/`);
-  });
-
-  test("path with query", async () => {
-    const r = await httpsGet("/secure?token=abc");
-    expect(r.protocol).toBe("https:");
-    expect(r.pathname).toBe("/secure");
-    expect(r.search).toBe("?token=abc");
-  });
-
-  test("x-forwarded-proto overrides detected protocol", async () => {
-    const r = await httpsGet("/", {"x-forwarded-proto": "http"});
-    expect(r.protocol).toBe("http:");
-  });
-});
-
-describe("http2", () => {
-  test("uses :authority for hostname", async () => {
-    const r = await http2Get("/");
-    expect(r.hostname).toBe("127.0.0.1");
-    expect(r.port).toBe(String(http2Port));
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("path with query", async () => {
-    const r = await http2Get("/path?q=1");
-    expect(r.pathname).toBe("/path");
-    expect(r.search).toBe("?q=1");
-    expect(r.href).toBe(`https://127.0.0.1:${http2Port}/path?q=1`);
-  });
-
-  test("x-forwarded-host overrides :authority", async () => {
-    const r = await http2Get("/", {"x-forwarded-host": "public.com"});
-    expect(r.hostname).toBe("public.com");
-  });
-
-  test("forwarded header", async () => {
-    const r = await http2Get("/path", {forwarded: "host=proxy.com:443;proto=https"});
-    expect(r.hostname).toBe("proxy.com");
-    expect(r.port).toBe("");
-  });
-
-  test("x-forwarded-proto overrides :scheme", async () => {
-    const r = await http2Get("/", {"x-forwarded-proto": "http"});
-    expect(r.protocol).toBe("http:");
-  });
-});
-
-function mockReq(opts: {
-  url?: string;
-  originalUrl?: string;
-  headers?: Record<string, string | string[]>;
-  encrypted?: boolean;
-  secure?: boolean;
-  scheme?: string;
-} = {}) {
-  return {
-    url: opts.url ?? "/",
-    ...(opts.originalUrl !== undefined && {originalUrl: opts.originalUrl}),
-    ...(opts.secure !== undefined && {secure: opts.secure}),
-    ...(opts.scheme !== undefined && {scheme: opts.scheme}),
-    socket: {encrypted: opts.encrypted ?? false},
-    headers: opts.headers ?? {},
-  } as unknown as http.IncomingMessage;
-}
-
-function reqUrl(opts: Parameters<typeof mockReq>[0] = {}): URL {
+function reqUrl(opts: MockReq): URL {
   return urlFromReq(mockReq(opts))!;
 }
 
-describe("mock tests", () => {
-  test("req.secure throwing does not crash", () => {
-    const req = {
-      url: "/",
-      headers: {host: "example.com"},
-      socket: {},
-      get secure(): boolean { throw new Error("trust is not a function"); },
-    } as unknown as http.IncomingMessage;
-    expect(urlFromReq(req)!.protocol).toBe("http:");
-  });
-
-  test("express req.originalUrl", () => {
-    const r = reqUrl({
-      url: "/modified",
-      originalUrl: "/original?q=1",
-      headers: {host: "example.com"},
-    });
-    expect(r.href).toBe("http://example.com/original?q=1");
-  });
-
-  test("req.scheme https", () => {
-    const r = reqUrl({headers: {":authority": "example.com"}, scheme: "https"});
-    expect(r.protocol).toBe("https:");
-  });
-
-  test(":scheme header", () => {
-    const r = reqUrl({headers: {":authority": "example.com", ":scheme": "https"}});
-    expect(r.protocol).toBe("https:");
-    expect(r.href).toBe("https://example.com/");
-  });
-
-  test("host header takes priority over :authority", () => {
-    const r = reqUrl({headers: {host: "host.com", ":authority": "authority.com"}});
-    expect(r.hostname).toBe("host.com");
-  });
-
-  test("no host header falls back to localhost", () => {
-    const r = reqUrl({url: "/path"});
-    expect(r.hostname).toBe("localhost");
-    expect(r.pathname).toBe("/path");
-  });
-
-  test("full url in req.url", () => {
-    const r = reqUrl({url: "http://example.com/path?q=1"});
-    expect(r.href).toBe("http://example.com/path?q=1");
-  });
-
-  test("header as array", () => {
-    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": ["https", "http"]}});
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("multiple x-forwarded-proto values", () => {
-    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": "https, http"}});
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("multiple forwarded entries uses first", () => {
-    const r = reqUrl({headers: {forwarded: "host=first.com;proto=https, host=second.com;proto=http"}});
-    expect(r.hostname).toBe("first.com");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("forwarded quoted host", () => {
-    const r = reqUrl({headers: {forwarded: 'host="example.com:8080";proto=https'}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.port).toBe("8080");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("forwarded ipv6 host", () => {
-    const r = reqUrl({headers: {forwarded: 'host="[::1]:8080";proto=http'}});
-    expect(r.hostname).toBe("[::1]");
-    expect(r.port).toBe("8080");
-  });
-
-  test("bracketed ipv6 host header", () => {
-    const r = reqUrl({headers: {host: "[::1]:8080"}});
-    expect(r.hostname).toBe("[::1]");
-    expect(r.port).toBe("8080");
-    expect(r.href).toBe("http://[::1]:8080/");
-  });
-
-  test("bracketed ipv6 without port", () => {
-    const r = reqUrl({headers: {host: "[::1]"}});
-    expect(r.hostname).toBe("[::1]");
-    expect(r.href).toBe("http://[::1]/");
-  });
-
-  test("bare ipv6 gets brackets", () => {
-    const r = reqUrl({headers: {host: "::1"}});
-    expect(r.hostname).toBe("[::1]");
-    expect(r.href).toBe("http://[::1]/");
-  });
-
-  test("full ipv6 address with port", () => {
-    const r = reqUrl({headers: {host: "[2001:db8::1]:443"}});
-    expect(r.hostname).toBe("[2001:db8::1]");
-    expect(r.port).toBe("443");
-  });
-
-  test("empty url", () => {
-    const r = reqUrl({url: "", headers: {host: "example.com"}});
-    expect(r.href).toBe("http://example.com/");
-  });
+test("req.secure throwing does not crash", () => {
+  expect(urlFromReq({url: "/", headers: {host: "example.com"}, socket: {}, get secure(): boolean { throw new Error("trust is not a function"); }} as unknown as http.IncomingMessage)!.href).toBe("http://example.com/");
 });
 
-describe("spec compliance", () => {
-  test("hostname is normalized to lowercase", () => {
-    const r = reqUrl({headers: {host: "Example.COM"}});
-    expect(r.hostname).toBe("example.com");
-  });
+test.each<[string, MockReq, string]>([
+  ["express req.originalUrl", {url: "/modified", originalUrl: "/original?q=1", headers: {host: "example.com"}}, "http://example.com/original?q=1"],
+  ["req.scheme https", {headers: {":authority": "example.com"}, scheme: "https"}, "https://example.com/"],
+  [":scheme header", {headers: {":authority": "example.com", ":scheme": "https"}}, "https://example.com/"],
+  ["host header takes priority over :authority", {headers: {host: "host.com", ":authority": "authority.com"}}, "http://host.com/"],
+  ["no host header falls back to localhost", {url: "/path"}, "http://localhost/path"],
+  ["full url in req.url", {url: "http://example.com/path?q=1"}, "http://example.com/path?q=1"],
+  ["header as array", {headers: {host: "example.com", "x-forwarded-proto": ["https", "http"]}}, "https://example.com/"],
+  ["multiple x-forwarded-proto values", {headers: {host: "example.com", "x-forwarded-proto": "https, http"}}, "https://example.com/"],
+  ["multiple forwarded entries uses first", {headers: {forwarded: "host=first.com;proto=https, host=second.com;proto=http"}}, "https://first.com/"],
+  ["forwarded quoted host", {headers: {forwarded: 'host="example.com:8080";proto=https'}}, "https://example.com:8080/"],
+  ["forwarded ipv6 host", {headers: {forwarded: 'host="[::1]:8080";proto=http'}}, "http://[::1]:8080/"],
+  ["bracketed ipv6 host header", {headers: {host: "[::1]:8080"}}, "http://[::1]:8080/"],
+  ["bracketed ipv6 without port", {headers: {host: "[::1]"}}, "http://[::1]/"],
+  ["bare ipv6 gets brackets", {headers: {host: "::1"}}, "http://[::1]/"],
+  ["full ipv6 address with port", {headers: {host: "[2001:db8::1]:443"}}, "http://[2001:db8::1]:443/"],
+  ["empty url", {url: "", headers: {host: "example.com"}}, "http://example.com/"],
+  ["hostname is normalized to lowercase", {headers: {host: "Example.COM"}}, "http://example.com/"],
+  ["default port 80 is omitted for http", {headers: {host: "example.com:80"}}, "http://example.com/"],
+  ["default port 443 is omitted for https", {headers: {host: "example.com:443"}, socket: {encrypted: true}}, "https://example.com/"],
+  ["pathname trailing slash is normalized", {headers: {host: "example.com"}}, "http://example.com/"],
+  ["percent-encoded path is preserved", {url: "/path%20with%20spaces", headers: {host: "example.com"}}, "http://example.com/path%20with%20spaces"],
+  ["rfc 7239 forwarded with for, by, host, proto", {headers: {forwarded: "for=192.0.2.60;proto=https;by=203.0.113.43;host=example.com"}}, "https://example.com/"],
+  ["rfc 7239 forwarded with quoted ipv6 for", {headers: {forwarded: 'for="[2001:db8:cafe::17]";host=example.com'}}, "http://example.com/"],
+  ["rfc 7239 case-insensitive parameter names", {headers: {forwarded: "Host=example.com;Proto=https"}}, "https://example.com/"],
+  ["rfc 7230 host header with ipv6 and port", {url: "/path", headers: {host: "[2001:db8::1]:8080"}}, "http://[2001:db8::1]:8080/path"],
+  ["http2 :authority with port", {headers: {":authority": "example.com:8443", ":scheme": "https"}}, "https://example.com:8443/"],
+  ["header priority: forwarded proto > x-forwarded-proto", {headers: {host: "example.com", forwarded: "proto=https", "x-forwarded-proto": "http"}}, "https://example.com/"],
+  ["header priority: x-forwarded-proto > :scheme", {headers: {host: "example.com", "x-forwarded-proto": "http", ":scheme": "https"}}, "http://example.com/"],
+  ["header priority: x-forwarded-host > host", {headers: {host: "internal.local", "x-forwarded-host": "public.com"}}, "http://public.com/"],
+  ["x-forwarded-host comma-separated uses first", {headers: {host: "internal.local", "x-forwarded-host": "example.com, foobar.com"}}, "http://example.com/"],
+  ["x-forwarded-host comma-separated with whitespace", {headers: {host: "internal.local", "x-forwarded-host": "example.com:8080 , foobar.com:9090"}}, "http://example.com:8080/"],
+  ["x-forwarded-host as array uses first", {headers: {host: "internal.local", "x-forwarded-host": ["example.com", "foobar.com"]}}, "http://example.com/"],
+  ["x-forwarded-port as array uses first", {headers: {host: "example.com", "x-forwarded-port": ["1337", "80"]}}, "http://example.com:1337/"],
+  ["forwarded header as array uses first", {headers: {forwarded: ["host=first.com;proto=https", "host=second.com;proto=http"]}}, "https://first.com/"],
+  ["empty x-forwarded-proto falls back", {headers: {host: "example.com", "x-forwarded-proto": ""}}, "http://example.com/"],
+  ["host header with userinfo", {headers: {host: "user@example.com"}}, "http://user@example.com/"],
+  ["long-form ipv6 is normalized", {headers: {host: "[2001:cdba:0000:0000:0000:0000:3257:9652]:1337"}}, "http://[2001:cdba::3257:9652]:1337/"],
+  ["plain ipv4 host without port", {url: "/path", headers: {host: "127.0.0.1"}}, "http://127.0.0.1/path"],
+  ["path with hash fragment", {url: "/path#fragment", headers: {host: "example.com"}}, "http://example.com/path#fragment"],
+  ["path with query and hash", {url: "/path?q=1#frag", headers: {host: "example.com"}}, "http://example.com/path?q=1#frag"],
+  ["host header with path is ignored for path", {url: "/actual", headers: {host: "example.com:8080/ignored"}}, "http://example.com:8080/actual"],
+])("%s", (_name, req, href) => expect(reqUrl(req).href).toBe(href));
 
-  test("default port 80 is omitted for http", () => {
-    const r = reqUrl({headers: {host: "example.com:80"}});
-    expect(r.port).toBe("");
-    expect(r.href).toBe("http://example.com/");
-  });
-
-  test("default port 443 is omitted for https", () => {
-    const r = reqUrl({headers: {host: "example.com:443"}, encrypted: true});
-    expect(r.port).toBe("");
-    expect(r.href).toBe("https://example.com/");
-  });
-
-  test("pathname trailing slash is normalized", () => {
-    const r = reqUrl({headers: {host: "example.com"}});
-    expect(r.pathname).toBe("/");
-  });
-
-  test("percent-encoded path is preserved", () => {
-    const r = reqUrl({url: "/path%20with%20spaces", headers: {host: "example.com"}});
-    expect(r.pathname).toBe("/path%20with%20spaces");
-  });
-
-  test("rfc 7239 forwarded with for, by, host, proto", () => {
-    const r = reqUrl({headers: {forwarded: "for=192.0.2.60;proto=https;by=203.0.113.43;host=example.com"}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("rfc 7239 forwarded with quoted ipv6 for", () => {
-    const r = reqUrl({headers: {forwarded: 'for="[2001:db8:cafe::17]";host=example.com'}});
-    expect(r.hostname).toBe("example.com");
-  });
-
-  test("rfc 7239 case-insensitive parameter names", () => {
-    const r = reqUrl({headers: {forwarded: "Host=example.com;Proto=https"}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("rfc 7230 host header with ipv6 and port", () => {
-    const r = reqUrl({url: "/path", headers: {host: "[2001:db8::1]:8080"}});
-    expect(r.hostname).toBe("[2001:db8::1]");
-    expect(r.port).toBe("8080");
-    expect(r.pathname).toBe("/path");
-  });
-
-  test("http2 :authority with port", () => {
-    const r = reqUrl({headers: {":authority": "example.com:8443", ":scheme": "https"}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.port).toBe("8443");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("header priority: forwarded proto > x-forwarded-proto", () => {
-    const r = reqUrl({headers: {
-      host: "example.com",
-      forwarded: "proto=https",
-      "x-forwarded-proto": "http",
-    }});
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("header priority: x-forwarded-proto > :scheme", () => {
-    const r = reqUrl({headers: {
-      host: "example.com",
-      "x-forwarded-proto": "http",
-      ":scheme": "https",
-    }});
-    expect(r.protocol).toBe("http:");
-  });
-
-  test("header priority: x-forwarded-host > host", () => {
-    const r = reqUrl({headers: {
-      host: "internal.local",
-      "x-forwarded-host": "public.com",
-    }});
-    expect(r.hostname).toBe("public.com");
-  });
-});
-
-describe("edge cases", () => {
-  test("x-forwarded-host comma-separated uses first", () => {
-    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": "example.com, foobar.com"}});
-    expect(r.hostname).toBe("example.com");
-  });
-
-  test("x-forwarded-host comma-separated with whitespace", () => {
-    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": "example.com:8080 , foobar.com:9090"}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.port).toBe("8080");
-  });
-
-  test("x-forwarded-host as array uses first", () => {
-    const r = reqUrl({headers: {host: "internal.local", "x-forwarded-host": ["example.com", "foobar.com"]}});
-    expect(r.hostname).toBe("example.com");
-  });
-
-  test("x-forwarded-port as array uses first", () => {
-    const r = reqUrl({headers: {host: "example.com", "x-forwarded-port": ["1337", "80"]}});
-    expect(r.port).toBe("1337");
-  });
-
-  test("forwarded header as array uses first", () => {
-    const r = reqUrl({headers: {forwarded: ["host=first.com;proto=https", "host=second.com;proto=http"]}});
-    expect(r.hostname).toBe("first.com");
-    expect(r.protocol).toBe("https:");
-  });
-
-  test("invalid host header returns null", () => {
-    expect(urlFromReq(mockReq({url: "/path", headers: {host: "invalid host with spaces"}}))).toBeNull();
-  });
-
-  test("empty x-forwarded-proto falls back", () => {
-    const r = reqUrl({headers: {host: "example.com", "x-forwarded-proto": ""}});
-    expect(r.protocol).toBe("http:");
-  });
-
-  test("host header with userinfo", () => {
-    const r = reqUrl({headers: {host: "user@example.com"}});
-    expect(r.hostname).toBe("example.com");
-  });
-
-  test("host header with userinfo and port returns null", () => {
-    expect(urlFromReq(mockReq({url: "/path", headers: {host: "user:pass@example.com:8080"}}))).toBeNull();
-  });
-
-  test("long-form ipv6 is normalized", () => {
-    const r = reqUrl({headers: {host: "[2001:cdba:0000:0000:0000:0000:3257:9652]:1337"}});
-    expect(r.hostname).toBe("[2001:cdba::3257:9652]");
-    expect(r.port).toBe("1337");
-  });
-
-  test("plain ipv4 host without port", () => {
-    const r = reqUrl({url: "/path", headers: {host: "127.0.0.1"}});
-    expect(r.hostname).toBe("127.0.0.1");
-    expect(r.port).toBe("");
-    expect(r.pathname).toBe("/path");
-  });
-
-  test("path with hash fragment", () => {
-    const r = reqUrl({url: "/path#fragment", headers: {host: "example.com"}});
-    expect(r.pathname).toBe("/path");
-    expect(r.hash).toBe("#fragment");
-  });
-
-  test("path with query and hash", () => {
-    const r = reqUrl({url: "/path?q=1#frag", headers: {host: "example.com"}});
-    expect(r.pathname).toBe("/path");
-    expect(r.search).toBe("?q=1");
-    expect(r.hash).toBe("#frag");
-  });
-
-  test("protocol-relative path does not override host", () => {
-    expect(reqUrl({url: "//todo@txt", headers: {host: "example.com"}}).href).toBe("http://example.com//todo@txt");
-    expect(reqUrl({url: "/\\evil.com/path", headers: {host: "example.com"}}).href).toBe("http://example.com//evil.com/path");
-  });
-
-  test("host header with path is ignored for path", () => {
-    const r = reqUrl({url: "/actual", headers: {host: "example.com:8080/ignored"}});
-    expect(r.hostname).toBe("example.com");
-    expect(r.port).toBe("8080");
-    expect(r.pathname).toBe("/actual");
-  });
+test("protocol-relative path does not override host", () => {
+  expect(reqUrl({url: "//todo@txt", headers: {host: "example.com"}}).href).toBe("http://example.com//todo@txt");
+  expect(reqUrl({url: "/\\evil.com/path", headers: {host: "example.com"}}).href).toBe("http://example.com//evil.com/path");
 });
 
 describe("invalid input returns null", () => {
-  test("host header with non-numeric port", () => {
-    expect(urlFromReq(mockReq({headers: {host: "example.com:x"}}))).toBeNull();
-  });
-
-  test("host header with invalid characters", () => {
-    expect(urlFromReq(mockReq({headers: {host: "%"}}))).toBeNull();
-  });
-
-  test("invalid x-forwarded-proto", () => {
-    expect(urlFromReq(mockReq({headers: {host: "example.com", "x-forwarded-proto": "ja va"}}))).toBeNull();
-  });
-
-  test("invalid forwarded proto", () => {
-    expect(urlFromReq(mockReq({headers: {forwarded: "host=example.com;proto=ja va"}}))).toBeNull();
-  });
-
-  test("invalid x-forwarded-host with non-numeric port", () => {
-    expect(urlFromReq(mockReq({headers: {host: "example.com", "x-forwarded-host": "public.com:x"}}))).toBeNull();
-  });
-
-  test("unparseable forwarded host is not rescued by valid host header", () => {
-    expect(urlFromReq(mockReq({headers: {forwarded: "host=[::1;proto=https", host: "example.com"}}))).toBeNull();
-  });
+  test.each<[string, MockReq]>([
+    ["host header with spaces", {url: "/path", headers: {host: "invalid host with spaces"}}],
+    ["host header with userinfo and port", {url: "/path", headers: {host: "user:pass@example.com:8080"}}],
+    ["host header with non-numeric port", {headers: {host: "example.com:x"}}],
+    ["host header with invalid characters", {headers: {host: "%"}}],
+    ["invalid x-forwarded-proto", {headers: {host: "example.com", "x-forwarded-proto": "ja va"}}],
+    ["invalid forwarded proto", {headers: {forwarded: "host=example.com;proto=ja va"}}],
+    ["invalid x-forwarded-host with non-numeric port", {headers: {host: "example.com", "x-forwarded-host": "public.com:x"}}],
+    ["unparseable forwarded host is not rescued by valid host header", {headers: {forwarded: "host=[::1;proto=https", host: "example.com"}}],
+  ])("%s", (_name, req) => expect(urlFromReq(mockReq(req))).toBeNull());
 });
